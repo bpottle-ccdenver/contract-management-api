@@ -13,7 +13,7 @@ function sanitizeDbUrl(url) {
   }
 }
 
-export const DB_SCHEMA = process.env.DB_SCHEMA || 'contract_management_db';
+export const DB_SCHEMA = process.env.DB_SCHEMA || 'contract_management';
 export const safeConnectionString = sanitizeDbUrl(process.env.DATABASE_URL || '');
 
 if (!process.env.DATABASE_URL) {

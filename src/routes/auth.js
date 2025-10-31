@@ -30,27 +30,40 @@ function clearSessionCookie(res) {
 }
 
 function extractSessionId(req) {
+  // Cookie first
   const cookieHeader = req.headers?.cookie;
-  if (!cookieHeader) return null;
-  const cookies = cookieHeader.split(';');
-  for (const cookie of cookies) {
-    const [key, ...rest] = cookie.trim().split('=');
-    if (key === SESSION_COOKIE_NAME) {
-      return decodeURIComponent(rest.join('='));
+  if (cookieHeader) {
+    const cookies = cookieHeader.split(';');
+    for (const cookie of cookies) {
+      const [key, ...rest] = cookie.trim().split('=');
+      if (key === SESSION_COOKIE_NAME) {
+        return decodeURIComponent(rest.join('='));
+      }
     }
+  }
+  // Header fallback for dev (X-Session-Id)
+  const headerToken = req.headers['x-session-id'];
+  if (typeof headerToken === 'string' && headerToken.trim().length > 0) {
+    return headerToken.trim();
+  }
+  // Authorization: Bearer <id>
+  const auth = req.headers['authorization'];
+  if (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ')) {
+    const token = auth.slice(7).trim();
+    if (token) return token;
   }
   return null;
 }
 
 function normalizeUserRow(row) {
   if (!row) return row;
-  const { user_id, username, name, status, last_login_at, created_at } = row;
-  return { user_id, username, name, status, last_login_at, created_at };
+  const { user_id, username, name, status, last_login_at, created_at, password_must_change } = row;
+  return { user_id, username, name, status, last_login_at, created_at, password_must_change: !!password_must_change };
 }
 
 async function fetchUserBySession(sessionId) {
   const sql = `
-    SELECT ua.user_id, ua.username, ua.name, ua.status, ua.created_at, ua.last_login_at
+    SELECT ua.user_id, ua.username, ua.name, ua.status, ua.created_at, ua.last_login_at, ua.password_must_change
     FROM ${DB_SCHEMA}.user_session s
     JOIN ${DB_SCHEMA}.user_account ua ON ua.user_id = s.user_id
     WHERE s.session_id = $1
@@ -73,7 +86,7 @@ router.post('/login', async (req, res) => {
 
     // Validate username/password using pgcrypto crypt() comparison
     const sql = `
-      SELECT user_id, username, name, status, created_at, last_login_at
+      SELECT user_id, username, name, status, created_at, last_login_at, password_must_change
       FROM ${DB_SCHEMA}.user_account
       WHERE username = $1
         AND password_hash = crypt($2, password_hash)
@@ -117,7 +130,7 @@ router.post('/login', async (req, res) => {
     client = null;
 
     setSessionCookie(res, sessionId);
-    return res.json(normalizeUserRow(user));
+    return res.json({ session_id: sessionId, ...normalizeUserRow(user) });
   } catch (err) {
     if (client) {
       try { await client.query('ROLLBACK'); } catch (_) {}
@@ -164,5 +177,31 @@ router.get('/me', async (req, res) => {
   }
 });
 
-export { router, extractSessionId, fetchUserBySession, setSessionCookie, clearSessionCookie, SESSION_COOKIE_NAME };
+router.post('/change-password', async (req, res) => {
+  try {
+    const sessionId = extractSessionId(req);
+    if (!sessionId) return res.status(401).json({ error: 'Not authenticated' });
+    const currentUser = await fetchUserBySession(sessionId);
+    if (!currentUser) return res.status(401).json({ error: 'Not authenticated' });
+    const { current_password, new_password } = req.body || {};
+    const cur = String(current_password || '');
+    const nxt = String(new_password || '');
+    if (cur.length === 0 || nxt.length === 0) return res.status(400).json({ error: 'current_password and new_password are required' });
+    if (nxt.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
 
+    // Verify current password
+    const checkSql = `SELECT 1 FROM ${DB_SCHEMA}.user_account WHERE user_id = $1 AND password_hash = crypt($2, password_hash)`;
+    const ok = await pool.query(checkSql, [currentUser.user_id, cur]);
+    if (ok.rowCount !== 1) return res.status(400).json({ error: 'Current password is incorrect' });
+
+    // Update password and clear must_change flag
+    const updSql = `UPDATE ${DB_SCHEMA}.user_account SET password_hash = ${DB_SCHEMA}.password_hash($1), password_must_change = FALSE WHERE user_id = $2`;
+    await pool.query(updSql, [nxt, currentUser.user_id]);
+    return res.status(204).send();
+  } catch (err) {
+    console.error('Error changing password:', err);
+    return res.status(500).json({ error: 'Internal server error, ' + (err?.message || err) });
+  }
+});
+
+export { router, extractSessionId, fetchUserBySession, setSessionCookie, clearSessionCookie, SESSION_COOKIE_NAME };

@@ -7,8 +7,8 @@ Overview
 Quickstart
 - Copy .env.example to .env and configure:
   - DATABASE_URL: Postgres connection string
-  - DB_SCHEMA: set to contract_management_db (default)
-  - PORT: default 3002
+  - DB_SCHEMA: set to contract_management (default)
+  - PORT: default 3001
   - SESSION_*: cookie settings (secure must be true in HTTPS/prod)
 - Install and run:
   - npm install
@@ -26,6 +26,5 @@ Routes
 
 Notes
 - Uses pgcrypto's crypt() for password validation: password_hash = crypt($password, password_hash).
-- DB schema defaults to contract_management_db; override via DB_SCHEMA.
+- DB schema defaults to contract_management; override via DB_SCHEMA.
 - CORS allows credentials for development; set SESSION_COOKIE_SECURE=true for HTTPS.
-
